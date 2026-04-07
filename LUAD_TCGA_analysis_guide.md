@@ -87,6 +87,7 @@ download_method <- "api"
 - `LUAD_core_DEG_top200.csv`：核心差异基因（默认 top200）。
 - `LUAD_core_DEG_GO_enrichment.csv`：GO 富集结果。
 - `LUAD_core_DEG_KEGG_enrichment.csv`：KEGG 富集结果。
+  - 其中 `geneID_symbol` 列为通路相关基因的 `gene symbol` 格式。
 - `LUAD_DEG_volcano.png`：差异火山图。
 - `LUAD_core_DEG_GO_dotplot.png`：GO 富集图。
 - `LUAD_core_DEG_KEGG_dotplot.png`：KEGG 富集图。

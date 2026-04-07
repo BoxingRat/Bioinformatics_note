@@ -215,6 +215,26 @@ ekegg <- enrichKEGG(
 
 if (!is.null(ekegg) && nrow(as.data.frame(ekegg)) > 0) {
   kegg_res <- as.data.frame(ekegg)
+
+  # KEGG结果中的geneID默认是ENTREZID，用gene symbol形式补充输出
+  entrez_symbol_map <- bitr(
+    unique(unlist(strsplit(kegg_res$geneID, "/"))),
+    fromType = "ENTREZID",
+    toType = "SYMBOL",
+    OrgDb = org.Hs.eg.db
+  )
+  entrez2symbol <- setNames(entrez_symbol_map$SYMBOL, entrez_symbol_map$ENTREZID)
+
+  kegg_res$geneID_symbol <- vapply(
+    kegg_res$geneID,
+    function(x) {
+      ids <- unlist(strsplit(x, "/"))
+      symbols <- ifelse(ids %in% names(entrez2symbol), entrez2symbol[ids], ids)
+      paste(symbols, collapse = "/")
+    },
+    FUN.VALUE = character(1)
+  )
+
   write.csv(kegg_res, file.path(out_dir, "LUAD_core_DEG_KEGG_enrichment.csv"), row.names = FALSE)
 
   p_kegg <- dotplot(ekegg, showCategory = 20) +
