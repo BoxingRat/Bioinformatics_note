@@ -29,6 +29,7 @@ Rscript scripts/gse212192_deseq2_analysis.R
 - 会自动清理分组标签中的误输入换行（例如手动输入 `WT1` 时误回车）。
 - 会自动从 `characteristics_ch1*` 中提取形如 `group: WT` / `condition: disease` 的键值作为候选分组列，提高自动分组识别成功率。
 - 读取 count matrix 时会识别“首列为空表头、基因ID在 rownames”的格式，避免把第一列样本（如 `WT1`）误当成基因列而丢失。
+- 若 `pheno` 缺失有效分组信息（例如全是 `unknown`），会尝试从样本名（如 `WT1/WT2/KO1/KO2`）自动推断分组列 `auto_group_from_sampleid`。
 
 ### 手动指定参数
 ```bash

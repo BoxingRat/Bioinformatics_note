@@ -74,6 +74,28 @@ extract_group_from_characteristics <- function(pheno) {
   pheno
 }
 
+infer_group_from_sample_names <- function(sample_names) {
+  x <- normalize_sample_id(sample_names)
+  # 常见命名：WT1, WT2, KO1, KO2 或 WT_1, KO-2
+  g1 <- sub("[-_ ]?[0-9]+$", "", x)
+  g1 <- ifelse(g1 == "", x, g1)
+  g1 <- toupper(g1)
+
+  uniq <- unique(g1)
+  if (length(uniq) >= 2 && length(uniq) <= max(6, floor(length(g1) * 0.8))) {
+    return(g1)
+  }
+
+  # 备选：提取前缀字母段
+  g2 <- toupper(sub("^([A-Za-z]+).*", "\\1", x))
+  uniq2 <- unique(g2)
+  if (length(uniq2) >= 2 && length(uniq2) <= max(6, floor(length(g2) * 0.8))) {
+    return(g2)
+  }
+
+  rep("unknown", length(sample_names))
+}
+
 pick_labels <- function(levels_vec) {
   lv <- as.character(levels_vec)
   low <- tolower(lv)
@@ -226,7 +248,9 @@ load_expr_with_fallback <- function(gse_id, outdir) {
           mat <- mat[, inter, drop = FALSE]
           pheno <- pheno[inter, , drop = FALSE]
         } else {
-          pheno <- data.frame(group = rep("unknown", length(sample_names)),
+          inferred_group <- infer_group_from_sample_names(sample_names)
+          pheno <- data.frame(group = inferred_group,
+                              sample_id = sample_names,
                               row.names = sample_names,
                               stringsAsFactors = FALSE)
         }
@@ -257,6 +281,12 @@ dat <- load_expr_with_fallback("GSE212192", outdir)
 expr <- dat$expr
 pheno <- dat$pheno
 pheno <- extract_group_from_characteristics(pheno)
+if (!("sample_id" %in% colnames(pheno))) {
+  pheno$sample_id <- rownames(pheno)
+}
+if (!("auto_group_from_sampleid" %in% colnames(pheno))) {
+  pheno$auto_group_from_sampleid <- infer_group_from_sample_names(rownames(pheno))
+}
 message(sprintf("表达矩阵来源: %s; 维度: %d genes x %d samples", dat$source, nrow(expr), ncol(expr)))
 
 if (is.na(group_col) || group_col == "") {
