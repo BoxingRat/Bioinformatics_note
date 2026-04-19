@@ -10,6 +10,7 @@ suppressPackageStartupMessages({
   library(ggrepel)
   library(clusterProfiler)
   library(org.Hs.eg.db)
+  library(org.Mm.eg.db)
   library(pheatmap)
 })
 
@@ -184,6 +185,18 @@ normalize_group_label <- function(x) {
 }
 
 load_expr_with_fallback <- function(gse_id, outdir) {
+  is_count_like_matrix <- function(m) {
+    if (is.null(m) || nrow(m) == 0 || ncol(m) == 0) return(FALSE)
+    suppressWarnings(storage.mode(m) <- "numeric")
+    v <- as.vector(m)
+    v <- v[is.finite(v)]
+    if (length(v) == 0) return(FALSE)
+    frac_int <- mean(abs(v - round(v)) < 1e-6)
+    frac_nonneg <- mean(v >= 0)
+    mx <- suppressWarnings(max(v, na.rm = TRUE))
+    frac_int > 0.9 && frac_nonneg > 0.95 && mx > 20
+  }
+
   gse_list <- getGEO(gse_id, GSEMatrix = TRUE, AnnotGPL = TRUE)
   eset <- pick_non_empty_eset(gse_list)
 
@@ -203,7 +216,11 @@ load_expr_with_fallback <- function(gse_id, outdir) {
       colnames(expr) <- make.unique(expr_ids)
       rownames(pheno) <- make.unique(pheno_ids)
     }
-    return(list(expr = expr, pheno = pheno, source = "GSEMatrix"))
+    if (is_count_like_matrix(expr)) {
+      return(list(expr = expr, pheno = pheno, source = "GSEMatrix"))
+    } else {
+      message("检测到 GSEMatrix 不是原始 count 矩阵（可能是TPM/FPKM/标准化值），将优先尝试 supplementary count 文件。")
+    }
   }
 
   message("GSEMatrix 中未发现可用表达矩阵，尝试从 supplementary files 读取 count matrix...")
@@ -261,7 +278,22 @@ load_expr_with_fallback <- function(gse_id, outdir) {
     }
   }
 
-  stop("supplementary files 中未能识别有效 count matrix。")
+  if (!is.null(eset)) {
+    message("supplementary files 未识别到 count，回退使用 GSEMatrix（统计显著性可能受影响）。")
+    expr <- exprs(eset)
+    pheno <- pData(eset)
+    expr_ids <- normalize_sample_id(colnames(expr))
+    pheno_ids <- normalize_sample_id(rownames(pheno))
+    if (length(expr_ids) == length(pheno_ids)) {
+      unified <- ifelse(expr_ids != "", expr_ids, pheno_ids)
+      unified[unified == ""] <- paste0("Sample", seq_along(unified))[unified == ""]
+      unified <- make.unique(unified)
+      colnames(expr) <- unified
+      rownames(pheno) <- unified
+    }
+    return(list(expr = expr, pheno = pheno, source = "GSEMatrix_noncount_fallback"))
+  }
+  stop("supplementary files 中未能识别有效 count matrix，且不存在可用 GSEMatrix。")
 }
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -376,11 +408,17 @@ res <- results(dds, contrast = c("group", treat_label, control_label))
 res_df <- as.data.frame(res) %>% rownames_to_column("gene_id") %>% arrange(padj)
 
 message("[5/8] 将差异基因名称统一为 genesymbol...")
-id_type <- ifelse(all(str_detect(res_df$gene_id, "^ENSG")), "ENSEMBL",
+is_mouse <- all(str_detect(res_df$gene_id, "^ENSMUSG")) || any(str_detect(res_df$gene_id, "^ENSMUSG"))
+is_human <- all(str_detect(res_df$gene_id, "^ENSG")) || any(str_detect(res_df$gene_id, "^ENSG"))
+OrgDb_use <- if (is_mouse) org.Mm.eg.db else org.Hs.eg.db
+kegg_org <- if (is_mouse) "mmu" else "hsa"
+message(sprintf("检测到物种: %s；富集数据库: %s", ifelse(is_mouse, "mouse", ifelse(is_human, "human", "human(default)")), kegg_org))
+
+id_type <- ifelse(any(str_detect(res_df$gene_id, "^ENS(MUS)?G")), "ENSEMBL",
                   ifelse(all(str_detect(res_df$gene_id, "^[0-9]+$")), "ENTREZID", "SYMBOL"))
 
 map_df <- tryCatch({
-  bitr(unique(res_df$gene_id), fromType = id_type, toType = c("SYMBOL", "ENTREZID"), OrgDb = org.Hs.eg.db)
+  bitr(unique(res_df$gene_id), fromType = id_type, toType = c("SYMBOL", "ENTREZID"), OrgDb = OrgDb_use)
 }, error = function(e) {
   message("ID 映射失败，默认使用原始 gene_id 作为 SYMBOL。")
   data.frame()
@@ -423,13 +461,13 @@ sig <- res_df %>% filter(!is.na(padj), padj < 0.05, abs(log2FoldChange) >= 1)
 entrez_sig <- unique(na.omit(sig$ENTREZID))
 
 if (length(entrez_sig) >= 10) {
-  ego <- enrichGO(gene = entrez_sig, OrgDb = org.Hs.eg.db, keyType = "ENTREZID", ont = "ALL", pAdjustMethod = "BH", qvalueCutoff = 0.2, readable = TRUE)
+  ego <- enrichGO(gene = entrez_sig, OrgDb = OrgDb_use, keyType = "ENTREZID", ont = "ALL", pAdjustMethod = "BH", qvalueCutoff = 0.2, readable = TRUE)
   write.csv(as.data.frame(ego), file.path(outdir, "GO_enrichment.csv"), row.names = FALSE)
   p_go <- dotplot(ego, showCategory = 20) + ggtitle("GO Enrichment")
   ggsave(file.path(outdir, "GO_dotplot.png"), p_go, width = 10, height = 8, dpi = 300)
 
-  ekegg <- enrichKEGG(gene = entrez_sig, organism = "hsa", pAdjustMethod = "BH", qvalueCutoff = 0.2)
-  ekegg <- setReadable(ekegg, OrgDb = org.Hs.eg.db, keyType = "ENTREZID")
+  ekegg <- enrichKEGG(gene = entrez_sig, organism = kegg_org, pAdjustMethod = "BH", qvalueCutoff = 0.2)
+  ekegg <- setReadable(ekegg, OrgDb = OrgDb_use, keyType = "ENTREZID")
   write.csv(as.data.frame(ekegg), file.path(outdir, "KEGG_enrichment.csv"), row.names = FALSE)
   p_kegg <- dotplot(ekegg, showCategory = 20) + ggtitle("KEGG Enrichment")
   ggsave(file.path(outdir, "KEGG_dotplot.png"), p_kegg, width = 10, height = 8, dpi = 300)
